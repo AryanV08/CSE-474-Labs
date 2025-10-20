@@ -13,13 +13,13 @@
 // =================== Macros ====================
 
 #define led_gpio 21
-#define p_resistor 1 // taking in input, lower value = higher brightness
-#define light_threshhold 3000 // if light goes below this threshhold start the buzzer sequence
+#define p_resistor 1 // taking in input
+#define light_threshhold 3000 // if light goes above this threshhold start the buzzer sequence
 
 
 // timer settings
-#define buzzer_segment 5000000 // in order for this to run the other 2 tones have to have run + the time it took to run so 15 seconds 5 second buzz each, wrap back around
-#define total_time 15000000
+#define buzzer_segment 5000000 // time each individal frequency (buzzer) will run 
+#define total_time 15000000 // combined time of all 3 
 
 
 #define TIMER_INCREMENT_MODE 1<<30 // flip bit 30 which corresponds to increment in register to 1, count up
@@ -64,27 +64,25 @@ void loop() {
 
 
       uint32_t sensor = analogRead(p_resistor);
-      // trackers, need to keep last time between loop() iterations thus static
-      //update snapshot once per loop :
+     
+      //update timer snapshot once per loop :
       *((volatile uint32_t *)TIMG_T0UPDATE_REG(0)) = 1;
       uint32_t current_time=0;
       current_time= *((volatile uint32_t * )TIMG_T0LO_REG(0)); //get last time snapshot
 
-
+      // trackers, need to track of start time and the checker flag thus static
       static uint32_t sequence_start_time=0;
+      static boolean run_sequence = false; 
 
 
-      static boolean run_sequence = false; // make static so we can wait aka for delay
-
-
-      //current goal replace delay(5000) using hardware time differences
-      if(sensor>3000 && ! run_sequence){
+  // Trigger buzzer sequence when light level goes above threshold, dont play otherwise
+      if(sensor>light_threshhold && ! run_sequence){
         run_sequence=true;
         sequence_start_time = current_time;
         Serial.printf("Sequence has started \n: ");
       }
 
-
+  // If sequence is active, play tones based on elapsed time
       if(run_sequence){
          uint32_t elapsed = current_time - sequence_start_time; // initially 0
          
@@ -117,7 +115,7 @@ void loop() {
 
 
         }else{
-          // this means were over the 15 second sequence stop the buzzer and reset flag
+      // Sequence complete: stop the buzzer and reset flag so a new trigger can start the next sequence
           ledcWrite(led_gpio, 0);
           run_sequence=false;
           Serial.printf("Sequence is over\n");
