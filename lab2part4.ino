@@ -1,9 +1,16 @@
+// Filename: Lab2Part4
+// Authors: Aryan Verma and David Montiel
+// Date: 10/20/2025
+// Description: The file uses a photresistor to control a buzzer depending on the ambienet light level.
+
 #include "driver/gpio.h"
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_periph.h"
 #include "soc/timer_group_reg.h"
 
+
+// =================== Macros ====================
 
 #define led_gpio 21
 #define p_resistor 1 // taking in input, lower value = higher brightness
@@ -24,10 +31,8 @@
 void setup() {
   // put your setup code here, to run once:
 
-
   //setup p_resistor as gpio
   PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[p_resistor],PIN_FUNC_GPIO);
-
 
   //set as input
   *((volatile uint32_t *)GPIO_ENABLE_REG) &= ~(1<<p_resistor);// auto comes cleared but for good practice
@@ -47,8 +52,6 @@ void setup() {
 
   // update to configure settings and have a baseline time to go off of in lo register
     *((volatile uint32_t *)TIMG_T0UPDATE_REG(0)) = 1;
-
-
 
 
   Serial.begin(115200);
