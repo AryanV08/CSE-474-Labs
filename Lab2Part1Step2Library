@@ -1,0 +1,38 @@
+// Filename: Lab2Part1Step2Library
+// Author: Aryan Verma
+// Date: 10/20/2025
+// Description: The file controls the blinking of an external LED on an ESP32
+
+#define GPIO_PIN 5
+
+void setup() {
+ // ================> TODO:
+ // Set a pin as output
+ Serial.begin(115200);
+ pinMode(GPIO_PIN, OUTPUT);
+}
+void loop() {
+ // ================> TODO:
+ // For 1000 repetitions:
+ //		Measure time to:
+ //        		- Turn pin's output to HIGH
+ //        		- Turn pin's output to LOW
+ // Print out total time to the serial monitor
+ // 1 second delay
+
+  unsigned long startTime;
+  unsigned long endTime;
+
+  
+  startTime = micros();
+
+  for(int i = 0; i < 1000; i++) {
+    digitalWrite(GPIO_PIN, HIGH);
+    digitalWrite(GPIO_PIN, LOW);
+  }
+  endTime = micros();
+  Serial.print("Total microseconds: ");
+  Serial.println(endTime - startTime);
+
+  delay(1000);
+}
