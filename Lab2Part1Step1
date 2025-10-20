@@ -1,0 +1,40 @@
+// Filename: Lab2Part1
+// Author: Aryan Verma
+// Date: 10/05/2025
+// Description: The file controls the blinking of an external LED on an ESP32
+
+#include "driver/gpio.h"
+#include "soc/io_mux_reg.h"
+#include "soc/gpio_reg.h"
+#include "soc/gpio_periph.h"
+#define GPIO_PIN 5 // GPIO5
+void setup() {
+ // This predefined macro sets the functionality of a specified pin (to UART, SPI, 
+ // GPIO, etc). Here we are setting pin 5 to be a general purpose input/output 
+ // pin.
+ PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[GPIO_PIN], PIN_FUNC_GPIO);
+ 
+// ===============> TODO:
+// Write code here (1-3 lines) to mark pin 5 as output
+ // using the GPIO_ENABLE_REG macro
+ *((volatile uint32_t *)GPIO_ENABLE_REG) |= (1<<GPIO_PIN);
+}
+void loop() {
+ // ===============> TODO:
+ // Turn LED on (set corresponding bit in GPIO output register)
+ // Write code here (1-3 lines) to mark pin 5 as HIGH output
+ // using the GPIO_OUT_REG macro
+ // Wait for 1 second
+
+ *((volatile uint32_t *)GPIO_OUT_REG) |= (1<<GPIO_PIN);
+
+  delay(1000);
+
+ // ===============> TODO:
+ // Turn LED off (clear corresponding bit in GPIO output register)
+ // Write code here (1-3 lines) to mark pin 5 as LOW output
+ // using the GPIO_OUT_REG macro
+ // Wait for 1 second
+ *((volatile uint32_t *)GPIO_OUT_REG) &= ~(1<<GPIO_PIN);
+ delay(1000);
+}
