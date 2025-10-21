@@ -7,48 +7,74 @@
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_periph.h"
+#include "soc/timer_group_reg.h"
 
 // =================== Macros ====================
 
 #define led_gpio 21
 #define p_resistor 1 // taking in input, lower value = higher brightness
-
+#define TIMER_INCREMENT_MODE 1<<30 
+#define TIMER_ENABLE 1<<31 
+#define DELAY 1500000
 
 void setup() {
- // put your setup code here, to run once:
-
-//PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[led_gpio],PIN_FUNC_GPIO); // dont need to set becasue its not doing GPIO its a PWM signal that does HIGH/LOW at the given frequency in ledcAttach eg 5000 cycles per second
-PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[p_resistor],PIN_FUNC_GPIO);
-
-// one output one input
-//*((volatile uint32_t *)GPIO_ENABLE_REG) |= 1<<led_gpio;// left shift to correct bit set, 1 or 0 will default to 1
-*((volatile uint32_t *)GPIO_ENABLE_REG) &= ~(1<<p_resistor);// auto comes cleared but for good practice
-
-//prep the pin no output
-ledcAttach(led_gpio, 5000, 12); // pin , 5000 0n/off cycles per second, 12 bits precision aka brightness levels 4095 whcih is coincidentally the max value of the p_resistor, can make 1-1 correspondence with the brightness
-    // this operation does the equvalent of setting up a gpio but for a PWM signal
-
-
-//get a baseline brightness
-
 Serial.begin(115200);
+
+ PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[p_resistor],PIN_FUNC_GPIO);
+
+ *((volatile uint32_t *)GPIO_ENABLE_REG) &= ~(1<<p_resistor);// auto comes cleared but for good practice
+
+//prep the pin to output
+ ledcAttach(led_gpio, 5000, 12); // pin 21 , 5000 0n/off cycles per second, 12 bits precision aka brightness levels 4095 whcih is coincidentally the max value of the p_resistor, can make 1-1 correspondence with the brightness
+
+//Timer Configuration for delay 
+
+//mock 32 bit register all zeroed out 
+ uint32_t timer_config1 = 0;
+
+ timer_config1 |= 80<<13; //divide the mhz by 80 to get 1mhz so were in ms 
+
+  // Set increment mode and enable timer
+ timer_config1 |= (TIMER_INCREMENT_MODE|TIMER_ENABLE);
+
+  //  Write the config to timer register
+   *((volatile uint32_t *)TIMG_T0CONFIG_REG(0)) = timer_config1;
+
+  // Trigger a timer update to load settings
+   *((volatile uint32_t *)TIMG_T0UPDATE_REG(0)) = 1;
+
 
 
 }
+//added 1.5 second delay between sensor readings to notice led change
 void loop() {
- // put your main code here, to run repeatedly:
-  Serial.printf("\n");
+  
+  uint32_t current_time=0; 
+
+  //get a snapshot of current time 
+  *((volatile uint32_t *)TIMG_T0UPDATE_REG(0)) = 1;
+
+  current_time= *((volatile uint32_t *) TIMG_T0LO_REG(0)); // get the most recent time from register 
+  
+  static uint32_t last_led_update = 0; // must remain between loop calls 
+
+//update LED brightness only after the delay interval has passed to avoid rapid sensor updates  
+  if(current_time - last_led_update >= DELAY){
   Serial.print(analogRead(p_resistor));
-
-
+  Serial.printf("\n");
+        
     uint32_t sensor = analogRead(p_resistor);
     uint32_t duty   = 4095 - sensor;  // invert the relationship less light = brighter led
    
-    //make the pin actually send out the PWM signal with the ON depending on the duty cycle  
-    ledcWrite(led_gpio, duty); // the duty value is used to calculate the percentage of the time the led should be ON during the ON/OFF cycles per sec aka the frequency, in our case the frequency is 5000 on/off cycles per second
-                              // if the duty value is 0 meaning its dark in a room wiht no light the duty cyucle in our code will be (4095-0 / 2^12 - 1 ) x %100 = %100 meaning our led will be on during the 5000 cycles/ sec giving peak brightness
-                              // the oppisite is true if it reads a lot of light if it reads 4095 the duty cycle is 0% meaning the led will be off which is what they asked the darker the reading the brigher the led
+    //make the pin actually send out the PWM signal with the ON time depending on the duty cycle calculated via DUTY value 
+    ledcWrite(led_gpio, duty); 
+  
+    last_led_update = current_time; //update to keep loop going 
+
+  }
 }
+   
+    
 
 
 
