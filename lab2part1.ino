@@ -1,7 +1,7 @@
 // Filename: Lab2Part1
 // Author: Aryan Verma and David Montiel
 // Date: 10/20/2025
-// Description: The file controls the blinking of an external LED on an ESP32
+// Description: This file compares the execution speed of Arduino library function vs direct register access
 
 
 // =================== Includes =======================
