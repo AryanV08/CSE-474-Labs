@@ -3,12 +3,14 @@
 // Date: 10/20/2025
 // Description: The file directly interacts with the ESP32's timer registers to control an LED
 
+// =================== Includes ==================
 #include "driver/gpio.h"
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_periph.h"
 #include "soc/timer_group_reg.h"
 
+// ================ Macros ==================
 #define GPIO_PIN 5
 #define LED_TOGGLE_INTERVAL 2000000
 #define TIMER_INCREMENT_MODE (1<<30) 
