@@ -1,8 +1,10 @@
 // Filename: Lab2Part4
 // Authors: Aryan Verma and David Montiel
 // Date: 10/20/2025
-// Description: The file uses a photresistor to control a buzzer depending on the ambienet light level.
+// Description: The file uses a photresistor to control a buzzer depending on the ambient light level.
 
+
+// =============== Includes =================
 #include "driver/gpio.h"
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
