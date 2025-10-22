@@ -3,6 +3,7 @@
 // Date: 10/20/2025
 // Description: The file uses a photresistor to control the brightness of an LED.
 
+// ====================== Includes =================
 #include "driver/gpio.h"
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
