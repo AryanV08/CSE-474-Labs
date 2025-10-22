@@ -14,7 +14,6 @@
 #define GPIO_PIN 5 // GPIO5
 
 void setup() {
- // ================> TODO:
  // Set a pin as output
  Serial.begin(115200);
 
