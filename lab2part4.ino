@@ -1,7 +1,7 @@
 // Filename: Lab2Part4
 // Authors: Aryan Verma and David Montiel
 // Date: 10/20/2025
-// Description: The file uses a photresistor to control a buzzer depending on the ambient light level.
+// Description: The file uses a photoresistor to control a buzzer depending on the ambient light level.
 
 
 // =============== Includes =================
