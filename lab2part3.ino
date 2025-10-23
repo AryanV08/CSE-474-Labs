@@ -1,7 +1,7 @@
 // Filename: Lab2Part3
 // Authors: Aryan Verma and David Montiel
 // Date: 10/20/2025
-// Description: The file uses a photresistor to control the brightness of an LED.
+// Description: The file uses a photoresistor to control the brightness of an LED.
 
 // ====================== Includes =================
 #include "driver/gpio.h"
