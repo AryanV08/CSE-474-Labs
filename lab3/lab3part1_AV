@@ -1,0 +1,55 @@
+#include <Wire.h>
+// Ensure that the LiquidCrystal I2C library by Frank de Brabander is installed in your Arduino IDE Library Manager
+#include <LiquidCrystal_I2C.h>
+
+#define LCD_ADDRESS 0x27
+#define BACKLIGHT 0x08
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Initialize the LCD
+
+void send_lcd_bits(uint8_t bit, bool rs) {
+  uint8_t data = (bit & 0xF0); // ensures upper bits preserved only, CHECK if necessary
+  data = data | BACKLIGHT; //  toggles backlight to turn on
+  data = data | (rs ? 0x01 : 0x00); // either rs bit is sent as command (0) or data (1)
+
+  Wire.beginTransmission(LCD_ADDRESS);
+  Wire.write(data | 0x04); // enable bit to signal LCD that data or command is coming
+  Wire.endTransmission();
+  delayMicroseconds(1);
+  Wire.beginTransmission(LCD_ADDRESS);
+  Wire.write(data & ~0x04); // enable bit to signal LCD that data or command is coming
+  Wire.endTransmission();
+  delayMicroseconds(50);
+}
+
+void lcd_send_byte(uint8_t value, bool rs) {
+  send_lcd_bits(value & 0xF0, rs);
+  send_lcd_bits((value << 4) & 0xF0, rs);
+}
+
+void setup() {
+ Serial.begin(115200);
+ Wire.begin(8, 9);
+ lcd.init();
+ delay(2);
+ lcd_send_byte(0x01, false);
+ delay(2);
+}
+
+
+void loop() {
+ // ====================> TODO:
+ // Write code that takes Serial input and displays it to the LCD. Do NOT use any 
+ // functions from the LiquidCrystal I2C library here.
+ if(Serial.available()) {
+  lcd_send_byte(0x01, false); //sends command
+  delay(2);
+  lcd_send_byte(0x80, false); 
+
+  while(Serial.available()) {
+    char character = Serial.read();
+    lcd_send_byte(character, true); 
+  }  
+ }
+
+}
