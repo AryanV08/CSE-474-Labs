@@ -116,9 +116,10 @@ void vTaskLCD(void *args) {
 // pause in-between
 void vTaskAnomalyAlarm(void *args) {
   while (1) {
-    // Need to wait for semaphore to ensure this is the only taks accessing the shared data
     if (xSemaphoreTake(lightDataSemaphore, portMAX_DELAY) == pdTRUE) {
-      if (sma > LIGHT_THRESHOLD_HIGH || sma < LIGHT_THRESHOLD_LOW) {
+      bool isAnomaly = (sma > LIGHT_THRESHOLD_HIGH || sma < LIGHT_THRESHOLD_LOW);
+      xSemaphoreGive(lightDataSemaphore);
+      if (isAnomaly) {
         for (int i = 0; i < 3; i++) {
           digitalWrite(ledPin, HIGH);
           vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -126,7 +127,6 @@ void vTaskAnomalyAlarm(void *args) {
           vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
       }
-      xSemaphoreGive(lightDataSemaphore);
     }
     // Delay to reduce CPU Load (checks every second for anomalies)
     vTaskDelay(1000 / portTICK_PERIOD_MS);
