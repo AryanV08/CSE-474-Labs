@@ -1,7 +1,8 @@
-#include <Arduino.h>
+#include <Arduino.h> 
 #include <MD_MAX72xx.h>
 #include <LiquidCrystal_I2C.h>
 #include <ESP32Servo.h>
+#include "esp_timer.h"
 
 // -------------------------------
 // Hardware Pins
@@ -15,27 +16,49 @@
 #define UART_TX_PIN 17
 
 // -------------------------------
-// LED Matrix Driver
+// Board dimensions
 // -------------------------------
+static const int BOARD_WIDTH  = 8;
+static const int BOARD_HEIGHT = 16;
+
+// -------------------------------
+// FreeRTOS Task Configuration
+// -------------------------------
+#define CORE_DISPLAY     0
+#define CORE_IO_HAPTIC   1
+
+#define TASK_STACK_SIZE  4096
+
+#define PRIO_UART        3
+#define PRIO_MATRIX      2
+#define PRIO_HAPTIC      3
+#define PRIO_LCD         1
+
+// -------------------------------
+// LED Matrix (2 modules chained vertically)
+// -------------------------------
+#define NUM_MATRICES 2
+
 MD_MAX72XX mx = MD_MAX72XX(
     MD_MAX72XX::PAROLA_HW,
     MATRIX_DIN,
     MATRIX_CLK,
-    MATRIX_CS
+    MATRIX_CS,
+    NUM_MATRICES
 );
 
 // -------------------------------
-// LCD Screen
+// LCD
 // -------------------------------
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // -------------------------------
-// Servo Object
+// Servo
 // -------------------------------
 Servo hapticServo;
 
 // -------------------------------
-// FreeRTOS Queues
+// Queues
 // -------------------------------
 QueueHandle_t displayQueue;
 QueueHandle_t lcdQueue;
@@ -45,7 +68,7 @@ QueueHandle_t hapticQueue;
 // Data Structures
 // -------------------------------
 struct BoardPacket {
-  uint8_t rows[8];
+  uint8_t rows[BOARD_HEIGHT];
 };
 
 struct LCDPacket {
@@ -54,27 +77,65 @@ struct LCDPacket {
 };
 
 struct HapticPacket {
-  uint8_t eventType; 
+  uint8_t eventType;
 };
 
 // -------------------------------
-// LED Matrix Task (Core 0)
+// Timer Globals
+// -------------------------------
+esp_timer_handle_t displayTimer;
+TaskHandle_t matrixTaskHandle = NULL;
+
+// -------------------------------
+// Timer ISR
+// -------------------------------
+void IRAM_ATTR onDisplayTimer(void *arg) {
+  if (matrixTaskHandle != NULL) {
+    BaseType_t high = pdFALSE;
+    vTaskNotifyGiveFromISR(matrixTaskHandle, &high);
+    portYIELD_FROM_ISR(high);
+  }
+}
+
+// -------------------------------
+// MATRIX TASK (Core 0)
 // -------------------------------
 void taskMatrix(void *pv) {
+  matrixTaskHandle = xTaskGetCurrentTaskHandle();
+
   BoardPacket board;
-  const TickType_t delayTicks = pdMS_TO_TICKS(10); // 100 Hz
 
   while (1) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
     if (xQueueReceive(displayQueue, &board, 0) == pdTRUE) {
+
       mx.clear();
-      for (int r = 0; r < 8; r++) {
-        for (int c = 0; c < 8; c++) {
-          bool pixel = (board.rows[r] >> c) & 1;
-          mx.setPoint(r, c, pixel);
+
+      // FIXED MAPPING FOR YOUR VERSION OF MD_MAX72XX:
+      //
+      // globalRow = logicalRow % 8
+      // globalCol = logicalCol + 8*(logicalRow/8)
+      //
+      // No device index needed — MD_MAX72xx routes columns automatically.
+      for (int logicalRow = 0; logicalRow < BOARD_HEIGHT; logicalRow++) {
+        uint8_t rowBits = board.rows[logicalRow];
+
+        int globalRow = logicalRow % 8;
+        int deviceIndex = logicalRow / 8;
+        int colOffset = deviceIndex * 8;  // 0 for top, 8 for bottom
+
+        for (int logicalCol = 0; logicalCol < BOARD_WIDTH; logicalCol++) {
+          bool pixel = (rowBits >> logicalCol) & 0x01;
+
+          int globalCol = logicalCol + colOffset;
+
+          // VALID call signature for your library:
+          //   setPoint(row, col, state)
+          mx.setPoint(globalRow, globalCol, pixel);
         }
       }
     }
-    vTaskDelay(delayTicks);
   }
 }
 
@@ -91,13 +152,11 @@ String getPieceName(uint8_t id) {
   }
 }
 
-
 // -------------------------------
-// LCD Task (Core 0)
+// LCD Task
 // -------------------------------
 void taskLCD(void *pv) {
   LCDPacket pkt;
-
   while (1) {
     if (xQueueReceive(lcdQueue, &pkt, portMAX_DELAY)) {
       lcd.clear();
@@ -109,211 +168,133 @@ void taskLCD(void *pv) {
       lcd.print("Next: ");
       lcd.print(getPieceName(pkt.nextPiece));
     }
+    vTaskDelay(pdMS_TO_TICKS(150));
   }
 }
 
 // -------------------------------
-// Servo Haptic Function
+// Servo Haptics
 // -------------------------------
 void playHaptic(uint8_t eventType) {
   switch(eventType) {
-
-    // Single line clear: short tap
     case 1:
       hapticServo.write(70);
       vTaskDelay(pdMS_TO_TICKS(120));
       hapticServo.write(90);
       break;
 
-    // Double line clear: double tap
     case 2:
       for (int i = 0; i < 2; i++) {
-        hapticServo.write(60);
-        vTaskDelay(pdMS_TO_TICKS(90));
-        hapticServo.write(90);
-        vTaskDelay(pdMS_TO_TICKS(120));
+        hapticServo.write(50);                        // stronger downward pulse
+        vTaskDelay(pdMS_TO_TICKS(160));              // allow servo to reach the angle
+        hapticServo.write(130);                       // strong upward rebound
+        vTaskDelay(pdMS_TO_TICKS(160));
+        hapticServo.write(90);                        // reset to center
+        vTaskDelay(pdMS_TO_TICKS(220));               // breathing room before next pulse
       }
       break;
 
-    // Triple line clear: longer vibration
+
     case 3:
       hapticServo.write(50);
-      vTaskDelay(pdMS_TO_TICKS(200));
-      hapticServo.write(100);
-      vTaskDelay(pdMS_TO_TICKS(200));
+      vTaskDelay(pdMS_TO_TICKS(220));
+      hapticServo.write(130);
+      vTaskDelay(pdMS_TO_TICKS(220));
       hapticServo.write(90);
       break;
 
-    // TETRIS: dramatic sweep
     case 4:
-      hapticServo.write(40);  // full left
-      vTaskDelay(pdMS_TO_TICKS(180));
-      hapticServo.write(140); // full right
-      vTaskDelay(pdMS_TO_TICKS(180));
-      hapticServo.write(90);  // center
-      break;
-
-    default:
+      hapticServo.write(40);
+      vTaskDelay(pdMS_TO_TICKS(220));
+      hapticServo.write(140);
+      vTaskDelay(pdMS_TO_TICKS(220));
+      hapticServo.write(90);
       break;
   }
 }
 
-
 // -------------------------------
-// Haptic Task (Core 1)
+// HAPTIC TASK
 // -------------------------------
 void taskHaptic(void *pv) {
   HapticPacket pkt;
   while (1) {
-    if (xQueueReceive(hapticQueue, &pkt, portMAX_DELAY)) {
+    if (xQueueReceive(hapticQueue, &pkt, portMAX_DELAY))
       playHaptic(pkt.eventType);
-    }
   }
 }
 
 // -------------------------------
-// UART Task (Core 1)
+// UART TASK
 // -------------------------------
 void taskUART(void *pv) {
   while (1) {
     if (Serial2.available()) {
+
       uint8_t header = Serial2.read();
       if (header != 0xAA) continue;
 
       uint8_t type = Serial2.read();
 
-      if (type == 0x01) {  
+      if (type == 0x01) {
         BoardPacket pkt;
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < BOARD_HEIGHT; i++)
           pkt.rows[i] = Serial2.read();
         xQueueSend(displayQueue, &pkt, 0);
       }
-
       else if (type == 0x02) {
         LCDPacket pkt;
         pkt.score = (Serial2.read() << 8) | Serial2.read();
         pkt.nextPiece = Serial2.read();
         xQueueSend(lcdQueue, &pkt, 0);
       }
-
       else if (type == 0x03) {
         HapticPacket pkt;
         pkt.eventType = Serial2.read();
         xQueueSend(hapticQueue, &pkt, 0);
       }
     }
-
     vTaskDelay(1);
   }
 }
 
-
 // -------------------------------
-// TEST TASK (Core 1) — REMOVE LATER
-// -------------------------------
-void taskTest(void *pv) {
-
-  // A few example Tetris boards (8x8) to simulate gameplay
-  uint8_t frames[][8] = {
-    // Empty board
-    {0,0,0,0,0,0,0,0},
-
-    // Falling I-piece (vertical)
-    {0b00011000,
-     0b00011000,
-     0b00011000,
-     0b00011000,
-     0,0,0,0},
-
-    // Falling T-piece
-    {0b00000000,
-     0b00010000,
-     0b00111000,
-     0b00000000,
-     0,0,0,0},
-
-    // Board with one line filled
-    {0b11111111,
-     0b00000000,
-     0b00011000,
-     0b00011000,
-     0,0,0,0},
-
-    // Board after line clear
-    {0,0,0,0,0,0,0,0}
-  };
-
-  int numFrames = sizeof(frames)/sizeof(frames[0]);
-
-  int score = 0;
-  int nextPiece = 2; // T-piece
-
-  while (1) {
-
-    for (int i = 0; i < numFrames; i++) {
-
-      // SEND MATRIX FRAME
-      BoardPacket bp;
-      memcpy(bp.rows, frames[i], 8);
-      xQueueSend(displayQueue, &bp, 0);
-
-      // UPDATE LCD (fake score, fake next piece)
-      LCDPacket lp = { score, nextPiece };
-      xQueueSend(lcdQueue, &lp, 0);
-
-      // HAPTIC: If a line is full, simulate line clear
-      if (frames[i][0] == 0xFF) {
-        HapticPacket hp = { 1 }; // single line clear
-        xQueueSend(hapticQueue, &hp, 0);
-        score += 100;
-      }
-
-      vTaskDelay(pdMS_TO_TICKS(700)); // simulate ~1 frame per 0.7 sec
-    }
-
-    nextPiece = (nextPiece + 1) % 7; // cycle through pieces
-  }
-}
-
-
-// -------------------------------
-// Setup
+// SETUP
 // -------------------------------
 void setup() {
   Serial.begin(115200);
 
-  // LED matrix
   mx.begin();
   mx.clear();
 
-  // LCD
   lcd.init();
   lcd.backlight();
 
-  // Servo
   hapticServo.setPeriodHertz(50);
   hapticServo.attach(SERVO_PIN, 500, 2400);
 
-  // UART
   Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
-  // Queues
   displayQueue = xQueueCreate(4, sizeof(BoardPacket));
   lcdQueue     = xQueueCreate(4, sizeof(LCDPacket));
   hapticQueue  = xQueueCreate(4, sizeof(HapticPacket));
 
-  // Tasks
-  xTaskCreatePinnedToCore(taskMatrix, "matrix", 4096, NULL, 2, NULL, 0);
-  xTaskCreatePinnedToCore(taskLCD,    "lcd",    4096, NULL, 1, NULL, 0);
-  xTaskCreatePinnedToCore(taskUART,   "uart",   4096, NULL, 3, NULL, 1);
-  xTaskCreatePinnedToCore(taskHaptic, "haptic", 4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(taskMatrix, "matrix", TASK_STACK_SIZE, NULL, PRIO_MATRIX, NULL, CORE_DISPLAY);
+  xTaskCreatePinnedToCore(taskLCD,    "lcd",    TASK_STACK_SIZE, NULL, PRIO_LCD,    NULL, CORE_DISPLAY);
+  xTaskCreatePinnedToCore(taskUART,   "uart",   TASK_STACK_SIZE, NULL, PRIO_UART,   NULL, CORE_IO_HAPTIC);
+  xTaskCreatePinnedToCore(taskHaptic, "haptic", TASK_STACK_SIZE, NULL, PRIO_HAPTIC, NULL, CORE_IO_HAPTIC);
 
-  // TEST TASKS  REMOVE later
-  xTaskCreatePinnedToCore(taskTest,   "test",   4096, NULL, 1, NULL, 1);
-  // xTaskCreatePinnedToCore(taskHapticTest, "hTest", 4096, NULL, 1, NULL, 1);
+  const esp_timer_create_args_t displayTimerArgs = {
+    .callback = &onDisplayTimer,
+    .arg = NULL,
+    .dispatch_method = ESP_TIMER_TASK,
+    .name = "matrix_timer"
+  };
 
+  esp_timer_create(&displayTimerArgs, &displayTimer);
+  esp_timer_start_periodic(displayTimer, 10000); // 10 ms
+
+  Serial.println("ESP32-A READY (8x16 vertical stack)");
 }
 
 void loop() {}
-
-
