@@ -1,5 +1,7 @@
-// ===================== ESP32-B (Backend / Game Logic) =====================
-// 8x16 Tetris board (two 8x8 matrices stacked as one tall board)
+// Filename: ESP32-B_BACKEND_TETRIS.ino
+// Author: David Montiel 
+// Date: 11/2/25
+// Description: This file handles all the backend logic of our ESP-32 based tetris game 
 
 // ====== Includes ======
 #include <Arduino.h>
@@ -8,20 +10,20 @@
 #include "freertos/queue.h"
 #include "esp_system.h"   // for esp_random()
 
+// ====== Macros ======
 #define UART_RX_PIN 16
 #define UART_TX_PIN 17
-
-// Button pins
 #define BUTTON_1 5 // left
-#define BUTTON_2 6 // down (DROP)
-#define BUTTON_3 2 // right
-#define BUTTON_4 45 // rotate
+#define BUTTON_2 6 // up
+#define BUTTON_3 45 // down
+#define BUTTON_4 2 // right
 
-// ====== Board dimensions for stacked display ======
+// ====== Globals and Global Types ======
+
+//board dimensions for stacked display
 static const int BOARD_WIDTH  = 8;   // columns
 static const int BOARD_HEIGHT = 16;  // rows (two 8x8 matrices)
 
-// ====== Game definitions ======
 enum ButtonCode : uint8_t {
   BTN_NONE = 0,
   BTN_LEFT,
@@ -38,13 +40,13 @@ enum HapticCode : uint8_t {
   HAPTIC_TETRIS
 };
 
-// ==== UART protocol constants (must match ESP32-A) ====
+// uart protocol constants to match frontend esp
 const uint8_t PKT_HEADER      = 0xAA;
 const uint8_t PKT_TYPE_BOARD  = 0x01;
 const uint8_t PKT_TYPE_LCD    = 0x02;
 const uint8_t PKT_TYPE_HAPTIC = 0x03;
 
-// 8x16 board: each byte = one row, 1 bit per cell
+// 8x16 board each byte = one row 1 bit per cell
 struct GameState {
   uint8_t  board[BOARD_HEIGHT];  // 16 rows
   uint16_t score;
@@ -52,16 +54,16 @@ struct GameState {
   HapticCode haptic;
 };
 
-// Packet to send to ESP32-A
+// packet to send to frontend esp
 struct DisplayPacket {
-  uint8_t type;                 // ex 0x01 = GAME_UPDATE
-  uint16_t score;               // little-endian
+  uint8_t type;                 
+  uint16_t score;               
   uint8_t nextPiece;            // 0–6
   uint8_t board[BOARD_HEIGHT];  // 16 rows
   uint8_t haptic;               // HapticCode
 };
 
-// ====== Tetris pieces ======
+//tetris pieces
 const uint8_t NUM_PIECES = 7;
 
 // TETROMINOES[pieceType][rotation][row]
@@ -117,77 +119,65 @@ const uint8_t TETROMINOES[NUM_PIECES][4][4] = {
   }
 };
 
-// Active falling piece
+// active falling piece
 struct ActivePiece {
   uint8_t type;   // 0..6 7 total pieces
   uint8_t rot;    // 0..3 aka 1 of 4 rotations
   int8_t x;       // board x (0..7)
-  int8_t y;       // board y (0..15), top of 4x4 box
+  int8_t y;       // board y (0..15) top of 4x4 box
 };
 
-// ====== Queues ======
-QueueHandle_t inputQueue;    // ButtonCode
-QueueHandle_t displayQueue;  // DisplayPacket
 
-// ====== Task handles ======
-TaskHandle_t irTaskHandle;
+QueueHandle_t inputQueue;    // buttonCode
+QueueHandle_t displayQueue;  // displayPacket
+
+TaskHandle_t buttonTaskHandle;
 TaskHandle_t gameTaskHandle;
 TaskHandle_t uartTaskHandle;
 
-// ====== Globals ======
 GameState gState;
 ActivePiece gPiece;
 
-// NEW: global timing state for speed control
+//global timing state for speed control
 TickType_t gCurrentTickPeriod = 0;
 uint32_t   gLastSpeedUpdateMs = 0;
 
-//===== Function Prototypes =====
-void IRTask(void *pv);
-void GameTask(void *pv);
-void UartTxTask(void *pv);
 
-void setupGameState();
-bool checkCollision(const GameState &st, const ActivePiece &p);
-void lockPieceIntoBoard(GameState &st, const ActivePiece &p);
-void clearFullLines(GameState &st);
-void spawnNewPiece(GameState &st, ActivePiece &p);
-
-// ====== setup / loop ======
 void setup() {
   Serial.begin(115200);        
   Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
   delay(2000);
-  Serial.println("\n\nESP32-B up and running (8x16 mode)");
+  Serial.println("\n\nESP32-B up and running");
 
-  // Button inputs with pull-ups.
+  // button inputs with pullups
   pinMode(BUTTON_1, INPUT_PULLUP);
   pinMode(BUTTON_2, INPUT_PULLUP);
   pinMode(BUTTON_3, INPUT_PULLUP);
   pinMode(BUTTON_4, INPUT_PULLUP);
 
-  // Create queues
+  // create queues
   inputQueue   = xQueueCreate(10, sizeof(ButtonCode));
   displayQueue = xQueueCreate(1,  sizeof(DisplayPacket)); // length 1 for xQueueOverwrite
 
-  // Initialize timing state
+  // initialize timing state
   gCurrentTickPeriod = pdMS_TO_TICKS(50); // start at 50 ms
   gLastSpeedUpdateMs = millis();
 
   setupGameState();
 
-  // Create tasks
-  xTaskCreatePinnedToCore(IRTask,     "IRTask",   4096, NULL, 2, &irTaskHandle,   0);
-  xTaskCreatePinnedToCore(GameTask,   "GameTask", 4096, NULL, 3, &gameTaskHandle, 1);
-  xTaskCreatePinnedToCore(UartTxTask, "UartTx",   4096, NULL, 1, &uartTaskHandle, 0);
+  // create tasks
+  xTaskCreatePinnedToCore(buttonTask,     "buttonTask",   4096, NULL, 2, &buttonTaskHandle,   0);
+  xTaskCreatePinnedToCore(gameTask,   "GameTask", 4096, NULL, 3, &gameTaskHandle, 1);
+  xTaskCreatePinnedToCore(uartTxTask, "UartTx",   4096, NULL, 1, &uartTaskHandle, 0);
 }
 
 void loop() {
-  // Everything is done in tasks
 }
 
-// ====== Initialize game ======
+// Name : setupGameState 
+// Description : initializes all game state fields by clearing the board, resetting
+// the score and haptic status, and spawning the first active Tetris piece
 void setupGameState() {
   for (int r = 0; r < BOARD_HEIGHT; r++) {
     gState.board[r] = 0;
@@ -199,23 +189,26 @@ void setupGameState() {
   spawnNewPiece(gState, gPiece);
 }
 
-// ====== Collision check ======
+// Name : checkCollision 
+// Description : determines whether the active piece p would collide with anything in the
+// given game state st by checking board boundaries and occupied cells. returns true if a
+// collision is detected and false otherwise
 bool checkCollision(const GameState &st, const ActivePiece &p) {
   const uint8_t* shape = TETROMINOES[p.type][p.rot];
 
   for (int py = 0; py < 4; py++) {
     uint8_t rowMask = shape[py];
     for (int px = 0; px < 4; px++) {
-      if (rowMask & (1 << (3 - px))) { // bit from left in 4-wide shape
+      if (rowMask & (1 << (3 - px))) { // bit from left in 4 wide shape
         int bx = p.x + px;
         int by = p.y + py;
 
-        // Outside board?
+        // outside board?
         if (bx < 0 || bx >= BOARD_WIDTH || by < 0 || by >= BOARD_HEIGHT) {
           return true;
         }
 
-        // Overlapping locked block?
+        // overlapping locked block?
         if (st.board[by] & (1 << bx)) {
           return true;
         }
@@ -225,7 +218,9 @@ bool checkCollision(const GameState &st, const ActivePiece &p) {
   return false;
 }
 
-// ====== Merge active piece into board permanently ======
+// Name : lockPieceIntoBoard 
+// Description : transfers the active piece p into the game board within st by writing its
+// occupied 4×4 shape cells into the board bitmap, this function has no return value
 void lockPieceIntoBoard(GameState &st, const ActivePiece &p) {
   const uint8_t* shape = TETROMINOES[p.type][p.rot];
 
@@ -243,7 +238,10 @@ void lockPieceIntoBoard(GameState &st, const ActivePiece &p) {
   }
 }
 
-// ====== Clear full lines, update score & haptic ======
+// Name : clearFullLines 
+// Description : scans the board in st for fully filled rows, removes each one, shifts the
+// above rows downward, updates the score based on how many were cleared, and sets the
+// appropriate haptic feedback code, this function has no return value
 void clearFullLines(GameState &st) {
   int cleared = 0;
 
@@ -251,13 +249,13 @@ void clearFullLines(GameState &st) {
     if (st.board[row] == 0xFF) { // all 8 bits set
       cleared++;
 
-      // Shift everything above down
+      // shift everything above down
       for (int r = row; r > 0; r--) {
         st.board[r] = st.board[r - 1];
       }
       st.board[0] = 0x00;
 
-      // Re-check same row index after shifting
+      // recheck same row index after shifting
       row++;
     }
   }
@@ -277,35 +275,43 @@ void clearFullLines(GameState &st) {
   }
 }
 
-// ====== Spawn new piece at top center ======
+// Name: spawnNewPiece
+// Description : initializes a new active tetris piece p in the game state st by assigning
+// it a random type, resetting its rotation and position, and updating the next-piece field.
+// if the new piece immediately collides with the board, the function triggers a game over
+// reset by clearing the board, resetting the score, and restoring default fall speed
 void spawnNewPiece(GameState &st, ActivePiece &p) {
   p.type = esp_random() % NUM_PIECES;
   p.rot  = 0;
-  p.x    = 2;   // near center of 8-wide board
-  p.y    = 0;   // top of 16-high board
+  p.x    = 2;   // near center of 8 wide board
+  p.y    = 0;   // top of 16 high board
 
   st.nextPiece = p.type;
 
-  // If it collides immediately, simple "game over": clear board & reset score
+  // if it collides immediately, simple game over, clear board and reset score
   if (checkCollision(st, p)) {
     for (int r = 0; r < BOARD_HEIGHT; r++) st.board[r] = 0;
     st.score = 0;
     st.haptic = HAPTIC_NONE;
 
-    // RESET SPEED ON GAME OVER
+    // RESET SPEED ON GAME OVER TO DEFAULT
     gCurrentTickPeriod = pdMS_TO_TICKS(50);   // back to 50 ms
-    gLastSpeedUpdateMs = millis();            // restart 5-second timer
+    gLastSpeedUpdateMs = millis();            // restart 5 second timer
     Serial.println("Game over: speed reset to 50 ms");
   }
 }
 
-// ====== Button Task ======
-void IRTask(void *pv) {
+// Name : buttonTask
+// Description: Continuously polls the four physical buttons, detects falling edge presses
+// (HIGH to LOW), maps each to the corresponding ButtonCode (left, right, rotate,
+// drop), and sends the result to inputQueue with a small debounce, runs forever
+// as a FreeRTOS task and does not return
+void buttonTask(void *pv) {
   (void)pv;
 
   Serial.println("ButtonTask started");
 
-  // Previous states for edge-detection
+  // previous states for edge detection
   int prev1 = HIGH;
   int prev2 = HIGH;
   int prev3 = HIGH;
@@ -321,35 +327,24 @@ void IRTask(void *pv) {
 
     ButtonCode code = BTN_NONE;
 
-    // DEBUG: print raw button states every 200ms
-    uint32_t now = millis();
-    if (now - lastPrint > 200) {
-      lastPrint = now;
-      Serial.print("Buttons: ");
-      Serial.print(curr1); Serial.print(" ");
-      Serial.print(curr2); Serial.print(" ");
-      Serial.print(curr3); Serial.print(" ");
-      Serial.println(curr4);
-    }
-
     // Map buttons:
     // BUTTON_1 = LEFT
-    // BUTTON_3 = RIGHT
-    // BUTTON_4 = ROTATE
-    // BUTTON_2 = DROP
+    // BUTTON_4 = RIGHT
+    // BUTTON_2 = ROTATE
+    // BUTTON_3 = DROP
     //
-    // Detect HIGH -> LOW (active-low with INPUT_PULLUP)
+    // detect HIGH to LOW 
     if (curr1 == LOW && prev1 == HIGH) {
-      code = BTN_LEFT;
-    } else if (curr3 == LOW && prev3 == HIGH) {
-      code = BTN_DROP;
+     code = BTN_LEFT;
     } else if (curr4 == LOW && prev4 == HIGH) {
-      code = BTN_RIGHT;
+    code = BTN_RIGHT;
     } else if (curr2 == LOW && prev2 == HIGH) {
-      code = BTN_ROTATE;
-    }
+    code = BTN_ROTATE;
+    } else if (curr3 == LOW && prev3 == HIGH) {
+    code = BTN_DROP;
+  } 
 
-    // Update previous states
+    // update previous states
     prev1 = curr1;
     prev2 = curr2;
     prev3 = curr3;
@@ -367,14 +362,18 @@ void IRTask(void *pv) {
   }
 }
 
-// ====== Game Task ======
-void GameTask(void *pv) {
+// Name: gameTask
+// Description : runs the main tetris game loop by applying gravity, handling player input,
+// speeding up over time, locking and spawning pieces, clearing lines, and packaging the
+// current board state into a display packet each tick this FreeRTOS task runs indefinitely
+// and does not return
+void gameTask(void *pv) {
   (void)pv;
 
-  // ---- Timing / speed control ----
-  const TickType_t baseTickPeriod = pdMS_TO_TICKS(50);   // initial 50ms tick (~20 Hz)
-  const TickType_t minTickPeriod  = pdMS_TO_TICKS(15);   // cap at ~66 Hz
-  const TickType_t tickDecrement  = pdMS_TO_TICKS(5);    // speed-up step
+  // timing/speed control 
+  const TickType_t baseTickPeriod = pdMS_TO_TICKS(50);   // initial 50ms tick (20 Hz)
+  const TickType_t minTickPeriod  = pdMS_TO_TICKS(15);   // cap at 66 Hz
+  const TickType_t tickDecrement  = pdMS_TO_TICKS(5);    // speed up step
   const uint32_t   speedIntervalMs = 5000;               // every 5 seconds
 
   const int gravityTicks = 10;  // piece moves down every 10 ticks
@@ -384,7 +383,7 @@ void GameTask(void *pv) {
   int tickCounter = 0;
 
   while (true) {
-    // ---- 0. Possibly speed up the game ----
+    //  possibly speed up the game
     uint32_t nowMs = millis();
     if (nowMs - gLastSpeedUpdateMs >= speedIntervalMs) {
       gLastSpeedUpdateMs = nowMs;
@@ -399,10 +398,10 @@ void GameTask(void *pv) {
       Serial.println(gCurrentTickPeriod * portTICK_PERIOD_MS);
     }
 
-    // ---- 1. Wait for next tick using the *current* period ----
+    // wait for next tick using the current period 
     vTaskDelayUntil(&wakeTime, gCurrentTickPeriod);
 
-    // ---- 2. Read input from queue ----
+    //  read input from queue 
     if (xQueueReceive(inputQueue, &input, 0) == pdTRUE) {
       ActivePiece trial = gPiece;
 
@@ -422,7 +421,7 @@ void GameTask(void *pv) {
           gPiece.rot = trial.rot;
         }
       } else if (input == BTN_DROP) {
-        // Hard drop: move down until collide
+        // hard drop move down until collide
         trial = gPiece;
         while (true) {
           trial.y++;
@@ -433,7 +432,7 @@ void GameTask(void *pv) {
           }
         }
 
-        // Lock piece, clear lines, spawn new one
+        // lock piece, clear lines, spawn new one
         lockPieceIntoBoard(gState, gPiece);
         clearFullLines(gState);
         spawnNewPiece(gState, gPiece);
@@ -442,7 +441,7 @@ void GameTask(void *pv) {
       input = BTN_NONE;
     }
 
-    // ---- 3. Gravity ----
+    //  gravity
     tickCounter++;
     if (tickCounter >= gravityTicks) {
       tickCounter = 0;
@@ -453,14 +452,14 @@ void GameTask(void *pv) {
       if (!checkCollision(gState, trial)) {
         gPiece.y++;
       } else {
-        // We hit something: lock current piece and spawn new
+        // we hit something, lock current piece and spawn new
         lockPieceIntoBoard(gState, gPiece);
         clearFullLines(gState);
         spawnNewPiece(gState, gPiece);
       }
     }
 
-    // ---- 4. Build display board (locked + active piece) ----
+    // build display board 
     uint8_t displayBoard[BOARD_HEIGHT];
     for (int r = 0; r < BOARD_HEIGHT; r++) {
       displayBoard[r] = gState.board[r];
@@ -480,7 +479,7 @@ void GameTask(void *pv) {
       }
     }
 
-    // ---- 5. Pack & send to display queue ----
+    // pack and send to display queue 
     DisplayPacket pkt;
     pkt.type      = 0x01;
     pkt.score     = gState.score;
@@ -494,21 +493,25 @@ void GameTask(void *pv) {
   }
 }
 
-// ====== UART TX Task ======
-void UartTxTask(void *pv) {
+// Name: uartTxTask
+// Description : waits for display packets from the game logic then transmits the board,
+// score/LCD data, and any haptic events over UART in the expected packet format for the
+// frontend esp32, runs indefinitely as a dedicated UART transmit task
+
+void uartTxTask(void *pv) {
   (void)pv;
   DisplayPacket pkt;
 
   while (true) {
     if (xQueueReceive(displayQueue, &pkt, portMAX_DELAY) == pdTRUE) {
-      // 1) Send BOARD packet: 0xAA, 0x01, 16 bytes of rows
+      // send board packet in expected format: 0xAA, 0x01, 16 bytes of rows
       Serial2.write(PKT_HEADER);
       Serial2.write(PKT_TYPE_BOARD);
       for (int r = 0; r < BOARD_HEIGHT; r++) {
         Serial2.write(pkt.board[r]);
       }
 
-      // 2) Send LCD packet: 0xAA, 0x02, score_hi, score_lo, nextPiece
+      // send lcd packet: 0xAA, 0x02, score_hi, score_lo, nextPiece
       Serial2.write(PKT_HEADER);
       Serial2.write(PKT_TYPE_LCD);
       uint8_t score_hi = (pkt.score >> 8) & 0xFF;
@@ -517,21 +520,13 @@ void UartTxTask(void *pv) {
       Serial2.write(score_lo);
       Serial2.write(pkt.nextPiece);
 
-      // 3) Send HAPTIC packet (optional): 0xAA, 0x03, eventType
+      //  send haptic packet : 0xAA, 0x03, eventType
       if (pkt.haptic != HAPTIC_NONE) {
         Serial2.write(PKT_HEADER);
         Serial2.write(PKT_TYPE_HAPTIC);
         Serial2.write((uint8_t)pkt.haptic);
         gState.haptic = HAPTIC_NONE;
       }
-
-      // Debug
-      Serial.print("TX: score=");
-      Serial.print(pkt.score);
-      Serial.print(" nextPiece=");
-      Serial.print(pkt.nextPiece);
-      Serial.print(" haptic=");
-      Serial.println((uint8_t)pkt.haptic);
     }
   }
 }
